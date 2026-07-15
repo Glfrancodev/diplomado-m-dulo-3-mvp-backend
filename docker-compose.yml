@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: phoenix_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-phoenix}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-phoenix}
+      POSTGRES_DB: ${DB_NAME:-phoenix_orders}
+    ports:
+      - '${DB_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-phoenix} -d ${DB_NAME:-phoenix_orders}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: phoenix_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-phoenix}
+      DB_PASSWORD: ${DB_PASSWORD:-phoenix}
+      DB_NAME: ${DB_NAME:-phoenix_orders}
+      PORT: 3000
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      NODE_ENV: production
+    ports:
+      - '${PORT:-3000}:3000'
+    # Aplica migraciones (JS compilado) y luego arranca la API.
+    command: >
+      sh -c "node node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js && node dist/main.js"
+
+volumes:
+  pgdata:
