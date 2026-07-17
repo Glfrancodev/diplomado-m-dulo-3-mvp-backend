@@ -26,6 +26,7 @@ import { HealthModule } from './health/health.module';
           database: db.name,
           autoLoadEntities: true,
           synchronize: false,
+          ssl: db.ssl ? { rejectUnauthorized: false } : false,
         };
       },
     }),

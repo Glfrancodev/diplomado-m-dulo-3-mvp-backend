@@ -4,6 +4,7 @@ export interface DatabaseConfig {
   user: string;
   password: string;
   name: string;
+  ssl: boolean;
 }
 
 export interface AppConfig {
@@ -23,5 +24,6 @@ export default (): AppConfig => ({
     user: process.env.DB_USER ?? 'phoenix',
     password: process.env.DB_PASSWORD ?? 'phoenix',
     name: process.env.DB_NAME ?? 'phoenix_orders',
+    ssl: process.env.DB_SSL === 'true',
   },
 });
