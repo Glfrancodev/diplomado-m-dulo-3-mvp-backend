@@ -1,0 +1,113 @@
+# phoenix-orders-backend/.github/workflows/deploy.yml
+# CI en cada Pull Request (main/develop) + CD al hacer merge/push a main.
+name: Backend CI/CD
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # CI: se ejecuta SIEMPRE (PRs y push). Es el check que exige el branch protection.
+  # ---------------------------------------------------------------------------
+  ci:
+    name: CI (lint, test, build, artefacto)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Tests
+        run: npm run test --if-present
+
+      - name: Auditoría de seguridad (no bloqueante)
+        run: npm audit --omit=dev || true
+
+      - name: Build
+        run: npm run build
+
+      # Requisito estricto: artefacto limpio.
+      # Solo dist/, package.json y package-lock.json. Sin src ni node_modules.
+      - name: Empaquetar artefacto limpio
+        run: zip -r backend-dist.zip dist package.json package-lock.json
+
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-dist
+          path: backend-dist.zip
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # CD: solo en push a main (es decir, cuando un PR se mergea a main).
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: CD (desplegar al EC2)
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar artefacto del job CI
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-dist
+
+      - name: Copiar artefacto al EC2 por SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: backend-dist.zip
+          target: /var/www/phoenix-backend
+
+      - name: Desplegar por SSH (descomprimir, env, deps, migraciones, PM2)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd /var/www/phoenix-backend
+
+            # 1) Descomprimir el artefacto (sobrescribe dist/ y los package*.json)
+            unzip -o backend-dist.zip
+            rm -f backend-dist.zip
+
+            # 2) Regenerar el .env desde los secrets (nunca vive en el repo)
+            cat > .env <<EOF
+            DB_HOST=${{ secrets.DB_HOST }}
+            DB_PORT=${{ secrets.DB_PORT }}
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_NAME=${{ secrets.DB_NAME }}
+            DB_SSL=true
+            PORT=3000
+            NODE_ENV=production
+            CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
+            EOF
+
+            # 3) Instalar solo dependencias de producción
+            npm install --omit=dev
+
+            # 4) Aplicar migraciones (TypeORM CLI sobre el data-source compilado)
+            node ./node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js
+
+            # 5) Arrancar/recargar el backend con PM2 (idempotente)
+            pm2 reload phoenix-api --update-env || pm2 start ecosystem.config.cjs
+            pm2 save
