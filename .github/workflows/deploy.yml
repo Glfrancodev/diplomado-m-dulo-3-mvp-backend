@@ -1,5 +1,5 @@
-# phoenix-orders-backend/.github/workflows/deploy.yml
-# CI en cada Pull Request (main/develop) + CD al hacer merge/push a main.
+# CI en PR/push + CD: build imagen → Docker Hub → deploy contenedor en EC2.
+# En el EC2: red Docker compartida + Postgres local (sin RDS).
 name: Backend CI/CD
 
 on:
@@ -8,12 +8,12 @@ on:
   push:
     branches: [main]
 
+env:
+  IMAGE_NAME: phoenix-backend
+
 jobs:
-  # ---------------------------------------------------------------------------
-  # CI: se ejecuta SIEMPRE (PRs y push). Es el check que exige el branch protection.
-  # ---------------------------------------------------------------------------
   ci:
-    name: CI (lint, test, build, artefacto)
+    name: CI (lint, test, build)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -40,74 +40,125 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Requisito estricto: artefacto limpio.
-      # Solo dist/, package.json y package-lock.json. Sin src ni node_modules.
-      - name: Empaquetar artefacto limpio
-        run: zip -r backend-dist.zip dist package.json package-lock.json
-
-      - name: Subir artefacto
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-dist
-          path: backend-dist.zip
-          retention-days: 1
-
-  # ---------------------------------------------------------------------------
-  # CD: solo en push a main (es decir, cuando un PR se mergea a main).
-  # ---------------------------------------------------------------------------
-  deploy:
-    name: CD (desplegar al EC2)
+  docker:
+    name: Build & push imagen (Docker Hub)
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+      image_ref: ${{ steps.meta.outputs.ref }}
     steps:
-      - name: Descargar artefacto del job CI
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-dist
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Copiar artefacto al EC2 por SCP
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: backend-dist.zip
-          target: /var/www/phoenix-backend
+      - name: Tags de imagen
+        id: meta
+        run: |
+          TAG="${GITHUB_SHA::7}"
+          REF="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
 
-      - name: Desplegar por SSH (descomprimir, env, deps, migraciones, PM2)
+      - name: Login Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.ref }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.ref }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: CD (Postgres + API en EC2)
+    needs: docker
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy por SSH (red Docker, Postgres, API)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_REF,IMAGE_TAG,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,CORS_ORIGIN
           script: |
-            set -e
-            cd /var/www/phoenix-backend
+            set -euo pipefail
 
-            # 1) Descomprimir el artefacto (sobrescribe dist/ y los package*.json)
-            unzip -o backend-dist.zip
-            rm -f backend-dist.zip
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
-            # 2) Regenerar el .env desde los secrets (nunca vive en el repo)
-            cat > .env <<EOF
-            DB_HOST=${{ secrets.DB_HOST }}
-            DB_PORT=${{ secrets.DB_PORT }}
-            DB_USER=${{ secrets.DB_USER }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            DB_NAME=${{ secrets.DB_NAME }}
-            DB_SSL=true
-            PORT=3000
-            NODE_ENV=production
-            CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
-            EOF
+            docker network create phoenix-net 2>/dev/null || true
 
-            # 3) Instalar solo dependencias de producción
-            npm install --omit=dev
+            # Postgres en el mismo EC2 (persistente). Hostname para el API: phoenix-db
+            if docker ps -a --format '{{.Names}}' | grep -qx 'phoenix-db'; then
+              docker start phoenix-db 2>/dev/null || true
+            else
+              docker run -d \
+                --name phoenix-db \
+                --network phoenix-net \
+                --restart unless-stopped \
+                -e POSTGRES_USER="$DB_USER" \
+                -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+                -e POSTGRES_DB="$DB_NAME" \
+                -v phoenix-pgdata:/var/lib/postgresql/data \
+                postgres:16-alpine
+            fi
 
-            # 4) Aplicar migraciones (TypeORM CLI sobre el data-source compilado)
-            node ./node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js
+            echo "Esperando Postgres..."
+            for i in $(seq 1 30); do
+              if docker exec phoenix-db pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
+                echo "Postgres listo."
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "ERROR: Postgres no respondió a tiempo"
+                docker logs phoenix-db --tail 50 || true
+                exit 1
+              fi
+              sleep 2
+            done
 
-            # 5) Arrancar/recargar el backend con PM2 (idempotente)
-            pm2 reload phoenix-api --update-env || pm2 start ecosystem.config.cjs
-            pm2 save
+            docker pull "${IMAGE_REF}:${IMAGE_TAG}"
+
+            docker stop phoenix-backend 2>/dev/null || true
+            docker rm phoenix-backend 2>/dev/null || true
+
+            # DB_HOST fijo: nombre del contenedor en phoenix-net. Sin SSL (no es RDS).
+            docker run -d \
+              --name phoenix-backend \
+              --network phoenix-net \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              -e DB_HOST=phoenix-db \
+              -e DB_PORT="${DB_PORT:-5432}" \
+              -e DB_USER="$DB_USER" \
+              -e DB_PASSWORD="$DB_PASSWORD" \
+              -e DB_NAME="$DB_NAME" \
+              -e DB_SSL=false \
+              -e PORT=3000 \
+              -e NODE_ENV=production \
+              -e CORS_ORIGIN="$CORS_ORIGIN" \
+              "${IMAGE_REF}:${IMAGE_TAG}"
+
+            docker image prune -f
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          IMAGE_REF: ${{ needs.docker.outputs.image_ref }}
+          IMAGE_TAG: ${{ needs.docker.outputs.image_tag }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}

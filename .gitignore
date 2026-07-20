@@ -23,3 +23,8 @@ npm-debug.log*
 
 /docs
 CLAUDE.md
+
+# AWS local outputs / keys
+/infra/aws/output/*.pem
+/infra/aws/output/ec2-info.txt
+/infra/aws/output/user-data.sh

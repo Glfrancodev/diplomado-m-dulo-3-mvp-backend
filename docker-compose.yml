@@ -37,9 +37,6 @@ services:
       NODE_ENV: production
     ports:
       - '${PORT:-3000}:3000'
-    # Aplica migraciones (JS compilado) y luego arranca la API.
-    command: >
-      sh -c "node node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js && node dist/main.js"
 
 volumes:
   pgdata:
