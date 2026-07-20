@@ -46,8 +46,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
+      # Solo el tag (SHA). NO incluir username en outputs: GitHub vacía outputs que contienen secrets.
       image_tag: ${{ steps.meta.outputs.tag }}
-      image_ref: ${{ steps.meta.outputs.ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,9 +56,8 @@ jobs:
         id: meta
         run: |
           TAG="${GITHUB_SHA::7}"
-          REF="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "Imagen: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${TAG}"
 
       - name: Login Docker Hub
         uses: docker/login-action@v3
@@ -75,8 +74,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ steps.meta.outputs.ref }}:${{ steps.meta.outputs.tag }}
-            ${{ steps.meta.outputs.ref }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -85,16 +84,33 @@ jobs:
     needs: docker
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      IMAGE_TAG: ${{ needs.docker.outputs.image_tag }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
     steps:
       - name: Deploy por SSH (red Docker, Postgres, API)
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_REF,IMAGE_TAG,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,CORS_ORIGIN
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_TAG,DB_PORT,DB_USER,DB_PASSWORD,DB_NAME,CORS_ORIGIN
           script: |
             set -euo pipefail
+
+            IMAGE="${DOCKERHUB_USERNAME}/phoenix-backend:${IMAGE_TAG}"
+            echo "Desplegando imagen: ${DOCKERHUB_USERNAME}/phoenix-backend:${IMAGE_TAG}"
+
+            if [ -z "${IMAGE_TAG}" ]; then
+              echo "ERROR: IMAGE_TAG vacío"
+              exit 1
+            fi
 
             echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
@@ -129,7 +145,7 @@ jobs:
               sleep 2
             done
 
-            docker pull "${IMAGE_REF}:${IMAGE_TAG}"
+            docker pull "$IMAGE"
 
             docker stop phoenix-backend 2>/dev/null || true
             docker rm phoenix-backend 2>/dev/null || true
@@ -149,16 +165,6 @@ jobs:
               -e PORT=3000 \
               -e NODE_ENV=production \
               -e CORS_ORIGIN="$CORS_ORIGIN" \
-              "${IMAGE_REF}:${IMAGE_TAG}"
+              "$IMAGE"
 
             docker image prune -f
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          IMAGE_REF: ${{ needs.docker.outputs.image_ref }}
-          IMAGE_TAG: ${{ needs.docker.outputs.image_tag }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
