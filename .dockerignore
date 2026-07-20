@@ -5,7 +5,15 @@ coverage
 .env.*
 !.env.example
 .git
+.github
 .gitignore
 *.log
 docs
 test
+deploy
+infra
+README.md
+.prettierrc
+eslint.config.mjs
+*.md
+.DS_Store
