@@ -80,17 +80,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # 2) HARDENING: escanea la imagen. Si hay CVEs CRITICAL/HIGH, FALLA el
-      #    build y NO se sube nada a ECR (gate de seguridad exigido en clase).
+      # 2) HARDENING: escanea la imagen con el contenedor oficial de Trivy.
+      #    Si hay CVEs CRITICAL/HIGH, --exit-code 1 FALLA el job y NO se sube
+      #    nada a ECR (gate de seguridad exigido en clase).
       - name: Escaneo de vulnerabilidades (Trivy) — frena el build si hay CRITICAL/HIGH
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
-          format: table
-          severity: CRITICAL,HIGH
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: os,library
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --scanners vuln \
+            "$IMAGE:$TAG"
 
       # 3) Solo si el escaneo pasó: etiqueta 'latest' y empuja ambas a ECR.
       - name: Push a ECR (solo si el escaneo pasó)
