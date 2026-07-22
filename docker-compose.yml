@@ -16,6 +16,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    # Hardening de runtime: sin escalada de privilegios.
+    security_opt:
+      - no-new-privileges:true
 
   backend:
     build:
@@ -37,6 +40,24 @@ services:
       NODE_ENV: production
     ports:
       - '${PORT:-3000}:3000'
+    # ----- Hardening de runtime -----------------------------------------
+    # 1) Sin escalada de privilegios (bloquea binarios setuid).
+    security_opt:
+      - no-new-privileges:true
+    # 2) Suelta TODAS las capabilities de Linux (la API no necesita ninguna).
+    cap_drop:
+      - ALL
+    # 3) Filesystem raíz de solo-lectura: el atacante no puede escribir binarios.
+    #    /tmp se monta como tmpfs para lo poco que Node pueda necesitar escribir.
+    read_only: true
+    tmpfs:
+      - /tmp
+    # 4) Límites de recursos: contención ante fugas / DoS.
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
 
 volumes:
   pgdata:

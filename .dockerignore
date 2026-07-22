@@ -1,19 +1,54 @@
+# ============================================================================
+# .dockerignore — reduce el build context y evita meter basura/secretos en la
+# imagen. Aunque el Dockerfile copia rutas específicas, esto es la red de
+# seguridad contra `COPY . .` accidentales y acelera el envío de contexto.
+# ============================================================================
+
+# Dependencias y artefactos (se reconstruyen dentro de la imagen)
 node_modules
 dist
+build
 coverage
+.nyc_output
+*.tsbuildinfo
+
+# Secretos y entornos — NUNCA dentro de la imagen
 .env
 .env.*
-!.env.example
+!.env.example        # el ejemplo (sin secretos) sí puede quedar versionado
+
+# Git / CI — inflan el tamaño y filtran historial
 .git
-.github
 .gitignore
-*.log
+.gitattributes
+.github
+
+# Docker (no se necesitan dentro del contexto de sí mismos)
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Docs, tests y tooling de desarrollo (no van al runtime)
 docs
 test
+*.spec.ts
+*.e2e-spec.ts
 deploy
 infra
 README.md
-.prettierrc
-eslint.config.mjs
 *.md
+.prettierrc
+.prettierignore
+eslint.config.mjs
+.editorconfig
+
+# Logs y temporales
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Editores / SO
+.vscode
+.idea
 .DS_Store
+Thumbs.db
