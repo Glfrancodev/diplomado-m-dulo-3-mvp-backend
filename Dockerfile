@@ -49,12 +49,20 @@ LABEL org.opencontainers.image.title="phoenix-orders-api" \
       org.opencontainers.image.source="https://github.com/Glfrancodev/diplomado-m-dulo-3-mvp-backend"
 
 # UN solo RUN (menos capas):
-#  - apk upgrade  -> parchea CVEs del SO base (baja el conteo de Scout/Trivy).
-#  - tini         -> init liviano como PID 1: reap de zombies + reenvío de señales
-#                    (SIGTERM) para shutdown graceful de Nest. Node como PID 1 no
-#                    reapea hijos y maneja señales de forma incompleta.
-#  - --no-cache   -> no deja el índice de apk en la capa (imagen más chica).
-RUN apk upgrade --no-cache && apk add --no-cache tini
+#  - apk upgrade      -> parchea CVEs del SO base (baja el conteo de Scout/Trivy).
+#  - apk add tini     -> init liviano como PID 1: reap de zombies + reenvío de
+#                        señales (SIGTERM) para shutdown graceful de Nest. Versión
+#                        fijada (Hadolint DL3018) para builds reproducibles.
+#  - rm -rf npm/npx   -> HARDENING: el runtime arranca con `node`, NO con npm.
+#                        Quitar npm elimina TODAS sus dependencias vulnerables
+#                        (tar, sigstore, picomatch...) que Trivy/Scout marcan en
+#                        la base. Menos superficie de ataque y menos peso.
+#  - --no-cache       -> no deja el índice de apk en la capa (imagen más chica).
+RUN apk upgrade --no-cache \
+    && apk add --no-cache tini=0.19.0-r3 \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+             /usr/local/lib/node_modules/corepack /usr/local/bin/corepack \
+             /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 # Solo el artefacto de runtime, con dueño no-root desde el propio COPY.
 # node:22-alpine ya trae el usuario 'node' (uid/gid 1000) -> no reinventamos.
