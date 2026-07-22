@@ -12,6 +12,10 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService<AppConfig, true>);
 
+  // Prefijo global /api para todos los endpoints (el frontend consume /api/*).
+  // Se excluye 'health' para que el healthcheck del contenedor siga en /health.
+  app.setGlobalPrefix('api', { exclude: ['health'] });
+
   app.use(helmet());
   app.enableCors({
     origin: config.get('corsOrigin', { infer: true }),
