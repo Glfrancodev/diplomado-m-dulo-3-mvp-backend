@@ -24,6 +24,9 @@ npm-debug.log*
 /docs
 CLAUDE.md
 
+# SBOM (generado por CI, subido como artefacto)
+sbom.cdx.json
+
 # AWS local outputs / keys
 /infra/aws/output/*.pem
 /infra/aws/output/ec2-info.txt

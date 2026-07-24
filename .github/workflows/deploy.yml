@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node 22
         uses: actions/setup-node@v4
@@ -28,6 +30,26 @@ jobs:
 
       - name: Instalar dependencias
         run: npm ci
+
+      - name: Lint Dockerfile (Hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+
+      - name: Secrets scan (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Vulnerabilidades en dependencias (Trivy fs)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
 
       - name: Lint
         run: npm run lint --if-present
@@ -97,7 +119,20 @@ jobs:
             --scanners vuln \
             "$IMAGE:$TAG"
 
-      # 3) Solo si el escaneo pasó: etiqueta 'latest' y empuja ambas a ECR.
+      # 3) SBOM: inventario de dependencias como artefacto auditable.
+      - name: Generar SBOM (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
+          format: cyclonedx
+          output: sbom.cdx.json
+      - name: Subir SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-backend
+          path: sbom.cdx.json
+
+      # 4) Solo si el escaneo pasó: etiqueta 'latest' y empuja ambas a ECR.
       - name: Push a ECR (solo si el escaneo pasó)
         env:
           IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
