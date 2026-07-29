@@ -1,0 +1,146 @@
+# ============================================================================
+# Stack de MONITOREO (Clase 6) — Falco + Falcosidekick + Prometheus + Grafana
+# ----------------------------------------------------------------------------
+# ES ADITIVO: NO modifica el Dockerfile, el pipeline ni el docker-compose.yml
+# de la app. Se levanta por separado, en el MISMO host Docker donde corren los
+# contenedores 'backend' / 'phoenix-db' (la EC2), para observarlos.
+#
+# Uso (en el host Linux, ej. la EC2):
+#   cd monitoring
+#   docker compose -f docker-compose.monitoring.yml up -d
+#
+# Falco monitorea a nivel de KERNEL (syscalls), así que ve TODOS los
+# contenedores del host sin importar su red. Requiere un host Linux real
+# (funciona en la EC2 Amazon Linux 2023 / kernel 6.1; NO en Docker Desktop).
+# ============================================================================
+
+services:
+  # --------------------------------------------------------------------------
+  # Falco — motor de detección de amenazas en runtime (eBPF moderno).
+  # Detecta shells, ejecución de gestores de paquetes, etc. dentro de los
+  # contenedores. Envía las alertas a Falcosidekick por HTTP.
+  # --------------------------------------------------------------------------
+  falco:
+    image: falcosecurity/falco:0.39.2
+    container_name: falco
+    restart: unless-stopped
+    privileged: true                     # Falco necesita acceso al kernel (eBPF).
+    depends_on:
+      - falcosidekick
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock   # enriquece con metadata de contenedores
+      - /proc:/host/proc:ro
+      - /etc:/host/etc:ro
+      - ./falco/falco.yaml:/etc/falco/falco.yaml:ro
+      - ./falco/falco_rules.local.yaml:/etc/falco/rules.d/falco_rules.local.yaml:ro
+      - ./falco/frontend_nginx.local.yaml:/etc/falco/rules.d/frontend_nginx.local.yaml:ro
+    networks:
+      - monitoring
+
+  # --------------------------------------------------------------------------
+  # Falcosidekick — recibe los eventos de Falco y expone /metrics para
+  # Prometheus (reemplaza al deprecado falco-exporter). Puerto 2801.
+  # --------------------------------------------------------------------------
+  falcosidekick:
+    image: falcosecurity/falcosidekick:2.31.1
+    container_name: falcosidekick
+    restart: unless-stopped
+    environment:
+      # La salida Prometheus está siempre activa en /metrics; el nivel mínimo
+      # de eventos que reenvía a las salidas se controla acá:
+      DEBUG: "false"
+    ports:
+      - "2801:2801"                      # /metrics (Prometheus) y recepción de Falco
+    networks:
+      - monitoring
+
+  # --------------------------------------------------------------------------
+  # nginx-frontend-exporter — traduce el stub_status del Nginx del frontend a
+  # métricas Prometheus. Vive en 'web' (para llegar a phoenix-frontend:8081) y
+  # en 'monitoring' (para que Prometheus lo scrapee). NO se publica al host.
+  # Requiere que la imagen del frontend exponga /stub_status en :8081.
+  # --------------------------------------------------------------------------
+  nginx-frontend-exporter:
+    image: nginx/nginx-prometheus-exporter:1.4.2
+    container_name: nginx-frontend-exporter
+    restart: unless-stopped
+    command:
+      - --nginx.scrape-uri=http://phoenix-frontend:8081/stub_status
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - monitoring
+      - web
+
+  # --------------------------------------------------------------------------
+  # cAdvisor — métricas de recursos (CPU/RAM/red/IO) de CADA contenedor del
+  # host. Es lo que alimenta el panel "salud del backend" en Grafana.
+  # --------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "8081:8080"
+    networks:
+      - monitoring
+
+  # --------------------------------------------------------------------------
+  # Prometheus — scrapea falcosidekick (alertas Falco) y cAdvisor (recursos).
+  # --------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=7d'
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+
+  # --------------------------------------------------------------------------
+  # Grafana — dashboards en tiempo real. Datasource + dashboard provisionados.
+  # --------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"                      # 3001 en el host para no chocar con la API (3000)
+    networks:
+      - monitoring
+
+networks:
+  monitoring:
+    driver: bridge
+  # Red compartida con la app (la crea el deploy del backend/frontend).
+  # 'external' = la usamos sin recrearla, no destructivo.
+  web:
+    external: true
+
+volumes:
+  prometheus-data:
+  grafana-data:

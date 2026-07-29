@@ -1,0 +1,68 @@
+# ============================================================================
+# Reglas personalizadas de Falco para Phoenix Orders (Clase 6).
+# Foco: detectar actividad sospechosa DENTRO del contenedor del backend NestJS.
+#   1) Apertura de una shell (sh/bash/...) interactiva o vía `docker exec`.
+#   2) Ejecución de gestores de paquetes (apk/npm/apt/...) = posible tampering.
+# ============================================================================
+
+# --- Alcance: nuestro contenedor de backend -------------------------------
+# Coincide por nombre de contenedor ('backend', el del deploy) o por el
+# repositorio de la imagen (ECR .../phoenix-orders-backend).
+- macro: phoenix_backend_container
+  condition: >
+    (container.name = "backend"
+     or container.image.repository endswith "phoenix-orders-backend")
+
+# --- Binarios de shell -----------------------------------------------------
+- list: phoenix_shell_binaries
+  items: [sh, bash, ash, dash, zsh, csh, ksh]
+
+# --- Gestores de paquetes / instaladores -----------------------------------
+- list: phoenix_package_binaries
+  items: [apk, npm, npx, yarn, pnpm, pip, pip3, apt, apt-get, dpkg, dnf, yum, gem]
+
+# --------------------------------------------------------------------------
+# Regla 1: shell abierta dentro del backend.
+# Se excluyen las DOS shells legítimas para evitar falsos positivos:
+#   - La del ARRANQUE (tini -> sh -c "migrations && node"): padre = 'tini'.
+#   - La del HEALTHCHECK, que Docker corre como `sh -c node -e "...health..."`
+#     cada 30s (padre = runc): se filtra por su cmdline.
+# Cualquier OTRA shell (un `docker exec`, o una lanzada por 'node' vía RCE) sí
+# dispara la alerta.
+# --------------------------------------------------------------------------
+- rule: Shell abierta en el contenedor backend
+  desc: >
+    Detecta la ejecución de una shell dentro del contenedor del backend NestJS,
+    excluyendo la shell del entrypoint (hija de tini) y la del healthcheck.
+  condition: >
+    spawned_process
+    and phoenix_backend_container
+    and proc.name in (phoenix_shell_binaries)
+    and not proc.pname = "tini"
+    and not proc.cmdline contains "3000/health"
+  output: >
+    ALERTA: shell abierta dentro del backend
+    (user=%user.name uid=%user.uid shell=%proc.name padre=%proc.pname
+     cmd=%proc.cmdline container=%container.name image=%container.image.repository)
+  priority: CRITICAL
+  tags: [container, shell, mitre_execution, phoenix]
+
+# --------------------------------------------------------------------------
+# Regla 2: uso de un gestor de paquetes dentro del backend.
+# La imagen hardened NO trae npm/yarn, pero 'apk' sigue en la base Alpine:
+# un atacante que intente `apk add ...` para instalar herramientas dispara esto.
+# --------------------------------------------------------------------------
+- rule: Instalacion de paquetes en el contenedor backend
+  desc: >
+    Detecta el uso de gestores de paquetes dentro del contenedor del backend
+    (indicador de manipulación / instalación de herramientas por un atacante).
+  condition: >
+    spawned_process
+    and phoenix_backend_container
+    and proc.name in (phoenix_package_binaries)
+  output: >
+    ALERTA: gestor de paquetes ejecutado dentro del backend
+    (user=%user.name gestor=%proc.name cmd=%proc.cmdline
+     container=%container.name image=%container.image.repository)
+  priority: CRITICAL
+  tags: [container, software_mgmt, mitre_persistence, phoenix]

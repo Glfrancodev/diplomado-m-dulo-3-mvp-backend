@@ -1,0 +1,60 @@
+################################################################################
+#  Reglas Falco LOCALES para el contenedor Nginx del FRONTEND (Clase 6).
+#  Provistas por el equipo de frontend, integradas al stack de monitoreo único.
+#  Se cargan junto con falco_rules.local.yaml (backend) en /etc/falco/rules.d.
+################################################################################
+
+# --- Identificación del contenedor del frontend -------------------------------
+- macro: frontend_nginx_container
+  condition: >
+    (container.name = "phoenix-frontend"
+     or container.image.repository endswith "phoenix-frontend")
+
+# Directorios de estáticos que Nginx sirve y que deben ser INMUTABLES en runtime.
+- list: frontend_static_dirs
+  items: ["/usr/share/nginx/html", "/var/www/html"]
+
+# --- REGLA 1: modificación de estáticos en runtime ----------------------------
+- rule: Frontend static content modified at runtime
+  desc: Escritura/creación/borrado de un archivo bajo el directorio de estáticos de Nginx.
+  condition: >
+    open_write
+    and frontend_nginx_container
+    and fd.name pmatch (frontend_static_dirs)
+  output: >
+    ALERTA: contenido estático del frontend modificado en runtime
+    (file=%fd.name proc=%proc.cmdline user=%user.name
+     container=%container.name image=%container.image.repository)
+  priority: CRITICAL
+  tags: [frontend, filesystem, integrity, mitre_persistence, T1565]
+
+# --- REGLA 2: shell dentro del contenedor de Nginx ----------------------------
+# Se excluye la shell del HEALTHCHECK del frontend (`sh -c wget http://127.0.0.1:8080/`)
+# para evitar falsos positivos en cada ciclo. Un `docker exec` o una shell por
+# RCE (cualquier otro cmdline) sí dispara.
+- rule: Shell spawned in frontend nginx container
+  desc: Apertura de una shell interactiva dentro del contenedor Nginx del frontend.
+  condition: >
+    spawned_process
+    and frontend_nginx_container
+    and proc.name in (shell_binaries)
+    and not proc.cmdline contains "127.0.0.1:8080"
+  output: >
+    ALERTA: shell abierta dentro del contenedor Nginx del frontend
+    (shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline
+     user=%user.name container=%container.name)
+  priority: CRITICAL
+  tags: [frontend, shell, mitre_execution, T1059]
+
+# --- REGLA 3 (bonus): gestor de paquetes en runtime ---------------------------
+- rule: Package manager run in frontend nginx container
+  desc: Ejecución de un gestor de paquetes dentro del contenedor del frontend.
+  condition: >
+    spawned_process
+    and frontend_nginx_container
+    and proc.name in (package_mgmt_binaries)
+  output: >
+    ALERTA: gestor de paquetes ejecutado en el contenedor del frontend
+    (cmdline=%proc.cmdline user=%user.name container=%container.name)
+  priority: CRITICAL
+  tags: [frontend, software_mgmt, mitre_execution]
