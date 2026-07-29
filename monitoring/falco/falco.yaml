@@ -1,0 +1,39 @@
+# ============================================================================
+# Configuración principal de Falco (Clase 6).
+# Motor: eBPF moderno (no requiere kernel headers en kernels >= 5.8).
+# Salida: stdout (para 'docker logs falco') + HTTP hacia Falcosidekick.
+# ============================================================================
+
+# Reglas: las oficiales + nuestras reglas personalizadas en rules.d/
+rules_files:
+  - /etc/falco/falco_rules.yaml
+  - /etc/falco/rules.d
+
+# Enriquecer eventos con metadata de contenedores de Docker.
+container_engines:
+  docker:
+    enabled: true
+
+# Motor de captura de syscalls: eBPF moderno (CO-RE, sin módulo de kernel).
+engine:
+  kind: modern_ebpf
+
+# Formato de salida.
+json_output: true
+json_include_output_property: true
+log_level: info
+priority: notice          # nivel mínimo de reglas a evaluar (notice y superiores)
+
+# Salida a stdout -> visible con `docker logs falco`.
+stdout_output:
+  enabled: true
+
+# Salida HTTP -> Falcosidekick (que a su vez expone /metrics para Prometheus).
+http_output:
+  enabled: true
+  url: "http://falcosidekick:2801/"
+  user_agent: "falcosecurity/falco"
+
+# Servidor de métricas nativo de Falco (opcional; Prometheus usa Falcosidekick).
+metrics:
+  enabled: false

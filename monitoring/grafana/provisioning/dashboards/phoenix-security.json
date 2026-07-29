@@ -1,0 +1,105 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "title": "Phoenix Orders — Seguridad (Falco) y Recursos",
+  "uid": "phoenix-security",
+  "version": 1,
+  "schemaVersion": 39,
+  "tags": ["phoenix", "falco", "security"],
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total de alertas Falco",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(falcosecurity_falcosidekick_falco_events_total)" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Alertas CRÍTICAS (Falco)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(falcosecurity_falcosidekick_falco_events_total{priority_raw=\"critical\"})" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Alertas Falco por prioridad (tasa/min)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (priority_raw) (rate(falcosecurity_falcosidekick_falco_events_total[1m]))", "legendFormat": "{{priority_raw}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Alertas Falco por regla",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "options": { "showHeader": true },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (rule, priority) (falcosecurity_falcosidekick_falco_events_total)", "format": "table", "instant": true }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Backend — CPU (núcleos)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 15 } } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(container_cpu_usage_seconds_total{name=\"backend\"}[1m]))", "legendFormat": "backend" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Backend — Memoria (MB)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "decmbytes", "custom": { "drawStyle": "line", "fillOpacity": 15 } } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "container_memory_usage_bytes{name=\"backend\"} / 1024 / 1024", "legendFormat": "backend" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Frontend Nginx — Requests (tasa/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 15 } } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(nginx_http_requests_total[1m])", "legendFormat": "requests/s" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Frontend Nginx — Conexiones activas",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 15 } } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "nginx_connections_active", "legendFormat": "activas" }
+      ]
+    }
+  ]
+}

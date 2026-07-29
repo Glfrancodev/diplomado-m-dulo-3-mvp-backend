@@ -1,0 +1,33 @@
+# ============================================================================
+# Prometheus — recolección de métricas para el dashboard de Grafana.
+#   - falcosidekick : alertas de seguridad generadas por Falco.
+#   - cadvisor      : uso de recursos por contenedor (CPU/RAM/red/IO).
+#   - prometheus    : auto-monitoreo.
+# ============================================================================
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Alertas de Falco (métrica: falcosecurity_falcosidekick_falco_events_total)
+  - job_name: 'falcosidekick'
+    static_configs:
+      - targets: ['falcosidekick:2801']
+
+  # Métricas de recursos de todos los contenedores del host
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # Métricas de Nginx del frontend (vía nginx-prometheus-exporter en red 'web')
+  - job_name: 'nginx-frontend'
+    static_configs:
+      - targets: ['nginx-frontend-exporter:9113']
+        labels:
+          app: phoenix-frontend
+          tier: frontend
+
+  # Auto-monitoreo de Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
